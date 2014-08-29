@@ -1,7 +1,7 @@
 /*
  * libkmod - interface to kernel module operations
  *
- * Copyright (C) 2011-2012  ProFUSION embedded systems
+ * Copyright (C) 2011-2013  ProFUSION embedded systems
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -29,7 +29,7 @@
 #include <unistd.h>
 
 #include "libkmod.h"
-#include "libkmod-private.h"
+#include "libkmod-internal.h"
 
 #ifdef ENABLE_XZ
 #include <lzma.h>
@@ -52,10 +52,12 @@ struct kmod_file {
 	gzFile gzf;
 #endif
 	int fd;
+	bool direct;
 	off_t size;
 	void *memory;
 	const struct file_ops *ops;
 	const struct kmod_ctx *ctx;
+	struct kmod_elf *elf;
 };
 
 #ifdef ENABLE_XZ
@@ -173,13 +175,12 @@ static int load_zlib(struct kmod_file *file)
 {
 	int err = 0;
 	off_t did = 0, total = 0;
-	unsigned char *p = NULL;
+	_cleanup_free_ unsigned char *p = NULL;
 
 	errno = 0;
 	file->gzf = gzdopen(file->fd, "rb");
-	if (file->gzf == NULL) {
+	if (file->gzf == NULL)
 		return -errno;
-	}
 	file->fd = -1; /* now owned by gzf due gzdopen() */
 
 	for (;;) {
@@ -213,9 +214,10 @@ static int load_zlib(struct kmod_file *file)
 
 	file->memory = p;
 	file->size = did;
+	p = NULL;
 	return 0;
+
 error:
-	free(p);
 	gzclose(file->gzf);
 	return err;
 }
@@ -253,9 +255,11 @@ static int load_reg(struct kmod_file *file)
 		return -errno;
 
 	file->size = st.st_size;
-	file->memory = mmap(0, file->size, PROT_READ, MAP_PRIVATE, file->fd, 0);
+	file->memory = mmap(NULL, file->size, PROT_READ, MAP_PRIVATE,
+			    file->fd, 0);
 	if (file->memory == MAP_FAILED)
 		return -errno;
+	file->direct = true;
 	return 0;
 }
 
@@ -267,6 +271,15 @@ static void unload_reg(struct kmod_file *file)
 static const struct file_ops reg_ops = {
 	load_reg, unload_reg
 };
+
+struct kmod_elf *kmod_file_get_elf(struct kmod_file *file)
+{
+	if (file->elf)
+		return file->elf;
+
+	file->elf = kmod_elf_new(file->memory, file->size);
+	return file->elf;
+}
 
 struct kmod_file *kmod_file_open(const struct kmod_ctx *ctx,
 						const char *filename)
@@ -290,6 +303,7 @@ struct kmod_file *kmod_file_open(const struct kmod_ctx *ctx,
 			magic_size_max = itr->magic_size;
 	}
 
+	file->direct = false;
 	if (magic_size_max > 0) {
 		char *buf = alloca(magic_size_max + 1);
 		ssize_t sz;
@@ -343,8 +357,21 @@ off_t kmod_file_get_size(const struct kmod_file *file)
 	return file->size;
 }
 
+bool kmod_file_get_direct(const struct kmod_file *file)
+{
+	return file->direct;
+}
+
+int kmod_file_get_fd(const struct kmod_file *file)
+{
+	return file->fd;
+}
+
 void kmod_file_unref(struct kmod_file *file)
 {
+	if (file->elf)
+		kmod_elf_unref(file->elf);
+
 	file->ops->unload(file);
 	if (file->fd >= 0)
 		close(file->fd);

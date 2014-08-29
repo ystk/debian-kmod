@@ -1,6 +1,7 @@
 #!/usr/bin/make -f
 SHELL+= -e
 
+KMOD_RECONFIGURE := 1
 BUILD_UDEB := 1
 
 
@@ -16,11 +17,11 @@ CONFFLAGS_deb  = $(CONFFLAGS) \
     dpkg-buildflags --export=configure || true) \
   --libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
   --with-rootlibdir=/lib/$(DEB_HOST_MULTIARCH) \
-  --enable-static --enable-debug
+  --enable-debug
 CONFFLAGS_udeb = $(CONFFLAGS) \
   $(subst -O2,-Os -fomit-frame-pointer,$(shell DEB_BUILD_MAINT_OPTIONS="hardening=-all" \
     dpkg-buildflags --export=configure || true)) \
-  --libdir=/lib --with-rootlibdir=/lib --disable-shared
+  --libdir=/lib --with-rootlibdir=/lib
 
 ##############################################################################
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
@@ -44,11 +45,12 @@ clean:
 	rm -rf .stamp-* build-*deb
 ifdef KMOD_RECONFIGURE
 	rm -f aclocal.m4 autom4te.cache/* config.h.in config.h.in~ configure \
-		Makefile.in $$(find m4/ -type l)
+		$$(find . -name Makefile.in) \
+		$$(find m4/ build-aux/ libkmod/ -type l)
 endif
 	dh_clean
 
-# if enabled, must build-depend on autoconf, automake, libtool
+# if enabled, must build-depend on: autoconf, automake, libtool, gtk-doc-tools
 ifdef KMOD_RECONFIGURE
 configure: configure.ac
 	gtkdocize --docdir libkmod/docs
@@ -114,7 +116,7 @@ endif
 	cp libkmod/README $(DD)/usr/share/doc/libkmod2/README.libkmod
 	dh_installchangelogs NEWS
 	dh_installman extra/*.5
-	dh_installinit --no-start --update-rcd-params="start 20 S ."
+	dh_installinit --no-start
 	dh_link
 	dh_strip
 	dh_compress

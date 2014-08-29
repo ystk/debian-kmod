@@ -1,3 +1,39 @@
+kmod (18-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Marco d'Itri <md@linux.it>  Sat, 21 Jun 2014 04:27:39 +0200
+
+kmod (17-2) unstable; urgency=medium
+
+  * Build-Depend on gtk-doc-tools. (Closes: #747005)
+
+ -- Marco d'Itri <md@linux.it>  Sun, 04 May 2014 20:38:42 +0200
+
+kmod (17-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Declared that kmod Breaks oss-compat 4. (Closes: #736748)
+  * Merged the few useful directives from the alsa-base package and added
+    a versioned Breaks to force it to be unistalled.
+
+ -- Marco d'Itri <md@linux.it>  Thu, 01 May 2014 21:10:36 +0200
+
+kmod (16-2) unstable; urgency=medium
+
+  * Always Build-Depend on xsltproc. (Closes: #733760)
+
+ -- Marco d'Itri <md@linux.it>  Thu, 02 Jan 2014 04:04:26 +0100
+
+kmod (16-1) unstable; urgency=low
+
+  * New upstream release. (Closes: #716739)
+    + Improves error messages. (Closes: #676387)
+    + Fixes modprobe -f. (Closes: #720599)
+  * Added an example to modules(5), patch by Regid Ichira. (Closes: #711468)
+
+ -- Marco d'Itri <md@linux.it>  Tue, 31 Dec 2013 03:56:44 +0100
+
 kmod (9-3) unstable; urgency=low
 
   * Added backported patch dot_kcmdline: correctly parse kcmdline parameters 

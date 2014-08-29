@@ -1,6 +1,4 @@
-dot_kcmdline
-bad_alias_assertion
-blacklist_aliased
+commit-74c2694
 
 # fixes to be pushed upstream
 verbose_missing_bin

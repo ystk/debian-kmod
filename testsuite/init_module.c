@@ -1,21 +1,28 @@
 /*
- * Copyright (C) 2012  ProFUSION embedded systems
+ * Copyright (C) 2012-2013  ProFUSION embedded systems
+ * Copyright (C) 2012-2013  Lucas De Marchi <lucas.de.marchi@gmail.com>
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#ifndef HAVE_FINIT_MODULE
+#define HAVE_FINIT_MODULE 1
+#endif
+
 #include <assert.h>
+#include <elf.h>
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -26,16 +33,18 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 
 /* kmod_elf_get_section() is not exported, we need the private header */
-#include <libkmod-private.h>
+#include <libkmod-internal.h>
 
 /* FIXME: hack, change name so we don't clash */
 #undef ERR
-#include "mkdir.h"
 #include "testsuite.h"
 #include "stripped-module.h"
 
@@ -147,7 +156,7 @@ static int create_sysfs_files(const char *modname)
 	strcpy(buf + len, modname);
 	len += strlen(modname);
 
-	assert(mkdir_p(buf, 0755) >= 0);
+	assert(mkdir_p(buf, len, 0755) >= 0);
 
 	strcpy(buf + len, "/initstate");
 	return write_one_line_file(buf, "live\n", strlen("live\n"));
@@ -206,6 +215,12 @@ static inline bool module_is_inkernel(const char *modname)
 	return ret;
 }
 
+static uint8_t elf_identify(void *mem)
+{
+	uint8_t *p = mem;
+	return p[EI_CLASS];
+}
+
 TS_EXPORT long init_module(void *mem, unsigned long len, const char *args);
 
 /*
@@ -225,6 +240,8 @@ long init_module(void *mem, unsigned long len, const char *args)
 	const void *buf;
 	uint64_t bufsize;
 	int err;
+	uint8_t class;
+	off_t offset;
 
 	init_retcodes();
 
@@ -236,14 +253,18 @@ long init_module(void *mem, unsigned long len, const char *args)
 								&bufsize);
 	kmod_elf_unref(elf);
 
-	/*
-	 * We couldn't find the module's name inside the ELF file. Just exit
-	 * as if it was successful
-	 */
+	/* We couldn't parse the ELF file. Just exit as if it was successful */
 	if (err < 0)
 		return 0;
 
-	modname = (char *)buf + offsetof(struct module, name);
+	/* We need to open both 32 and 64 bits module - hack! */
+	class = elf_identify(mem);
+	if (class == ELFCLASS64)
+		offset = MODULE_NAME_OFFSET_64;
+	else
+		offset = MODULE_NAME_OFFSET_32;
+
+	modname = (char *)buf + offset;
 	mod = find_module(modules, modname);
 	if (mod != NULL) {
 		errno = mod->errcode;
@@ -258,6 +279,86 @@ long init_module(void *mem, unsigned long len, const char *args)
 		create_sysfs_files(modname);
 
 	return err;
+}
+
+static int check_kernel_version(int major, int minor)
+{
+	struct utsname u;
+	const char *p;
+	int maj = 0, min = 0;
+
+	if (uname(&u) < 0)
+		return false;
+	for (p = u.release; *p >= '0' && *p <= '9'; p++)
+		maj = maj * 10 + *p - '0';
+	if (*p == '.')
+		for (p++; *p >= '0' && *p <= '9'; p++)
+			min = min * 10 + *p - '0';
+	if (maj > major || (maj == major && min >= minor))
+		return true;
+	return false;
+}
+
+
+TS_EXPORT int finit_module(const int fd, const char *args, const int flags);
+
+int finit_module(const int fd, const char *args, const int flags)
+{
+	int err;
+	void *mem;
+	unsigned long len;
+	struct stat st;
+
+	if (!check_kernel_version(3, 8)) {
+		errno = ENOSYS;
+		return -1;
+	}
+	if (fstat(fd, &st) < 0)
+		return -1;
+
+	len = st.st_size;
+	mem = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (mem == MAP_FAILED)
+		return -1;
+
+	err = init_module(mem, len, args);
+	munmap(mem, len);
+
+	return err;
+}
+
+TS_EXPORT long int syscall(long int __sysno, ...)
+{
+	va_list ap;
+	long ret;
+
+	if (__sysno == -1) {
+		errno = ENOSYS;
+		return -1;
+	}
+
+	if (__sysno == __NR_finit_module) {
+		const char *args;
+		int flags;
+		int fd;
+
+		va_start(ap, __sysno);
+
+		fd = va_arg(ap, int);
+		args = va_arg(ap, const char *);
+		flags = va_arg(ap, int);
+
+		ret = finit_module(fd, args, flags);
+
+		va_end(ap);
+		return ret;
+	}
+
+	/*
+	 * FIXME: no way to call the libc function - let's hope there are no
+	 * other users.
+	 */
+	abort();
 }
 
 /* the test is going away anyway, but lets keep valgrind happy */
