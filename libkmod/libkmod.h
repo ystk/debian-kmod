@@ -1,7 +1,7 @@
 /*
  * libkmod - interface to kernel module operations
  *
- * Copyright (C) 2011-2012  ProFUSION embedded systems
+ * Copyright (C) 2011-2013  ProFUSION embedded systems
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#pragma once
 #ifndef _LIBKMOD_H_
 #define _LIBKMOD_H_
 
@@ -139,7 +140,7 @@ struct kmod_module *kmod_module_get_module(const struct kmod_list *entry);
 /* Removal flags */
 enum kmod_remove {
 	KMOD_REMOVE_FORCE = O_TRUNC,
-	KMOD_REMOVE_NOWAIT = O_NONBLOCK,
+	KMOD_REMOVE_NOWAIT = O_NONBLOCK, /* always set */
 };
 
 /* Insertion flags */
@@ -160,6 +161,7 @@ enum kmod_probe {
 	/* codes below can be used in return value, too */
 	KMOD_PROBE_APPLY_BLACKLIST_ALL =	0x10000,
 	KMOD_PROBE_APPLY_BLACKLIST =		0x20000,
+	KMOD_PROBE_APPLY_BLACKLIST_ALIAS_ONLY =	0x40000,
 };
 
 /* Flags to kmod_module_apply_filter() */

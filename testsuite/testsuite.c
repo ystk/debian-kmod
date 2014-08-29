@@ -1,24 +1,26 @@
 /*
- * Copyright (C) 2012  ProFUSION embedded systems
+ * Copyright (C) 2012-2013  ProFUSION embedded systems
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -222,7 +224,7 @@ static inline int test_run_child(const struct test *t, int fdout[2],
 	test_export_environ(t);
 
 	/* Close read-fds and redirect std{out,err} to the write-fds */
-	if (t->output.stdout != NULL) {
+	if (t->output.out != NULL) {
 		close(fdout[0]);
 		if (dup2(fdout[1], STDOUT_FILENO) < 0) {
 			ERR("could not redirect stdout to pipe: %m\n");
@@ -230,10 +232,10 @@ static inline int test_run_child(const struct test *t, int fdout[2],
 		}
 	}
 
-	if (t->output.stderr != NULL) {
+	if (t->output.err != NULL) {
 		close(fderr[0]);
 		if (dup2(fderr[1], STDERR_FILENO) < 0) {
-			ERR("could not redirect stdout to pipe: %m\n");
+			ERR("could not redirect stderr to pipe: %m\n");
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -281,12 +283,12 @@ static inline bool test_run_parent_check_outputs(const struct test *t,
 		return false;
 	}
 
-	if (t->output.stdout != NULL) {
-		fd_matchout = open(t->output.stdout, O_RDONLY);
+	if (t->output.out != NULL) {
+		fd_matchout = open(t->output.out, O_RDONLY);
 		if (fd_matchout < 0) {
 			err = -errno;
 			ERR("could not open %s for read: %m\n",
-							t->output.stdout);
+							t->output.out);
 			goto out;
 		}
 		memset(&ep_outpipe, 0, sizeof(struct epoll_event));
@@ -300,12 +302,12 @@ static inline bool test_run_parent_check_outputs(const struct test *t,
 	} else
 		fdout = -1;
 
-	if (t->output.stderr != NULL) {
-		fd_matcherr = open(t->output.stderr, O_RDONLY);
+	if (t->output.err != NULL) {
+		fd_matcherr = open(t->output.err, O_RDONLY);
 		if (fd_matcherr < 0) {
 			err = -errno;
 			ERR("could not open %s for read: %m\n",
-					t->output.stderr);
+					t->output.err);
 			goto out;
 
 		}
@@ -433,17 +435,288 @@ out:
 	return err == 0;
 }
 
+static inline int safe_read(int fd, void *buf, size_t count)
+{
+	int r;
+
+	while (1) {
+		r = read(fd, buf, count);
+		if (r == -1 && errno == EINTR)
+			continue;
+		break;
+	}
+
+	return r;
+}
+
+static bool check_generated_files(const struct test *t)
+{
+	const struct keyval *k;
+
+	/* This is not meant to be a diff replacement, just stupidly check if
+	 * the files match. Bear in mind they can be binary files */
+	for (k = t->output.files; k && k->key; k++) {
+		struct stat sta, stb;
+		int fda = -1, fdb = -1;
+		char bufa[4096];
+		char bufb[4096];
+
+		fda = open(k->key, O_RDONLY);
+		if (fda < 0) {
+			ERR("could not open %s\n - %m\n", k->key);
+			goto fail;
+		}
+
+		fdb = open(k->val, O_RDONLY);
+		if (fdb < 0) {
+			ERR("could not open %s\n - %m\n", k->val);
+			goto fail;
+		}
+
+		if (fstat(fda, &sta) != 0) {
+			ERR("could not fstat %d %s\n - %m\n", fda, k->key);
+			goto fail;
+		}
+
+		if (fstat(fdb, &stb) != 0) {
+			ERR("could not fstat %d %s\n - %m\n", fdb, k->key);
+			goto fail;
+		}
+
+		if (sta.st_size != stb.st_size) {
+			ERR("sizes do not match %s %s\n", k->key, k->val);
+			goto fail;
+		}
+
+		for (;;) {
+			int r, done;
+
+			r = safe_read(fda, bufa, sizeof(bufa));
+			if (r < 0)
+				goto fail;
+
+			if (r == 0)
+				/* size is already checked, go to next file */
+				goto next;
+
+			for (done = 0; done < r;) {
+				int r2 = safe_read(fdb, bufb + done, r - done);
+
+				if (r2 <= 0)
+					goto fail;
+
+				done += r2;
+			}
+
+			if (memcmp(bufa, bufb, r) != 0)
+				goto fail;
+		}
+
+next:
+		close(fda);
+		close(fdb);
+		continue;
+
+fail:
+		if (fda >= 0)
+			close(fda);
+		if (fdb >= 0)
+			close(fdb);
+
+		return false;
+	}
+
+	return true;
+}
+
+static int cmp_modnames(const void *m1, const void *m2)
+{
+	const char *s1 = *(char *const *)m1;
+	const char *s2 = *(char *const *)m2;
+	int i;
+
+	for (i = 0; s1[i] || s2[i]; i++) {
+		char c1 = s1[i], c2 = s2[i];
+		if (c1 == '-')
+			c1 = '_';
+		if (c2 == '-')
+			c2 = '_';
+		if (c1 != c2)
+			return c1 - c2;
+	}
+	return 0;
+}
+
+/*
+ * Store the expected module names in buf and return a list of pointers to
+ * them.
+ */
+static const char **read_expected_modules(const struct test *t,
+		char **buf, int *count)
+{
+	const char **res;
+	int len;
+	int i;
+	char *p;
+
+	if (t->modules_loaded[0] == '\0') {
+		*count = 0;
+		*buf = NULL;
+		return NULL;
+	}
+	*buf = strdup(t->modules_loaded);
+	if (!*buf) {
+		*count = -1;
+		return NULL;
+	}
+	len = 1;
+	for (p = *buf; *p; p++)
+		if (*p == ',')
+			len++;
+	res = malloc(sizeof(char *) * len);
+	if (!res) {
+		perror("malloc");
+		*count = -1;
+		free(*buf);
+		*buf = NULL;
+		return NULL;
+	}
+	i = 0;
+	res[i++] = *buf;
+	for (p = *buf; i < len; p++)
+		if (*p == ',') {
+			*p = '\0';
+			res[i++] = p + 1;
+		}
+	*count = len;
+	return res;
+}
+
+static char **read_loaded_modules(const struct test *t, char **buf, int *count)
+{
+	char dirname[PATH_MAX];
+	DIR *dir;
+	struct dirent *dirent;
+	int i;
+	int len = 0, bufsz;
+	char **res = NULL;
+	char *p;
+	const char *rootfs = t->config[TC_ROOTFS] ? t->config[TC_ROOTFS] : "";
+
+	/* Store the entries in /sys/module to res */
+	if (snprintf(dirname, sizeof(dirname), "%s/sys/module", rootfs)
+			>= (int)sizeof(dirname)) {
+		ERR("rootfs path too long: %s\n", rootfs);
+		*buf = NULL;
+		len = -1;
+		goto out;
+	}
+	dir = opendir(dirname);
+	/* not an error, simply return empty list */
+	if (!dir) {
+		*buf = NULL;
+		goto out;
+	}
+	bufsz = 0;
+	while ((dirent = readdir(dir))) {
+		if (dirent->d_name[0] == '.')
+			continue;
+		len++;
+		bufsz += strlen(dirent->d_name) + 1;
+	}
+	res = malloc(sizeof(char *) * len);
+	if (!res) {
+		perror("malloc");
+		len = -1;
+		goto out_dir;
+	}
+	*buf = malloc(bufsz);
+	if (!*buf) {
+		perror("malloc");
+		free(res);
+		res = NULL;
+		len = -1;
+		goto out_dir;
+	}
+	rewinddir(dir);
+	i = 0;
+	p = *buf;
+	while ((dirent = readdir(dir))) {
+		int size;
+
+		if (dirent->d_name[0] == '.')
+			continue;
+		size = strlen(dirent->d_name) + 1;
+		memcpy(p, dirent->d_name, size);
+		res[i++] = p;
+		p += size;
+	}
+out_dir:
+	closedir(dir);
+out:
+	*count = len;
+	return res;
+}
+
+static int check_loaded_modules(const struct test *t)
+{
+	int l1, l2, i1, i2;
+	const char **a1;
+	char **a2;
+	char *buf1, *buf2;
+	int err = false;
+
+	a1 = read_expected_modules(t, &buf1, &l1);
+	if (l1 < 0)
+		return err;
+	a2 = read_loaded_modules(t, &buf2, &l2);
+	if (l2 < 0)
+		goto out_a1;
+	qsort(a1, l1, sizeof(char *), cmp_modnames);
+	qsort(a2, l2, sizeof(char *), cmp_modnames);
+	i1 = i2 = 0;
+	err = true;
+	while (i1 < l1 || i2 < l2) {
+		int cmp;
+
+		if (i1 >= l1)
+			cmp = 1;
+		else if (i2 >= l2)
+			cmp = -1;
+		else
+			cmp = cmp_modnames(&a1[i1], &a2[i2]);
+		if (cmp == 0) {
+			i1++;
+			i2++;
+		} else if (cmp < 0) {
+			err = false;
+			ERR("module %s not loaded\n", a1[i1]);
+			i1++;
+		} else  {
+			err = false;
+			ERR("module %s is loaded but should not be \n", a2[i2]);
+			i2++;
+		}
+	}
+	free(a2);
+	free(buf2);
+out_a1:
+	free(a1);
+	free(buf1);
+	return err;
+}
+
 static inline int test_run_parent(const struct test *t, int fdout[2],
 				int fderr[2], int fdmonitor[2], pid_t child)
 {
 	pid_t pid;
 	int err;
-	bool matchout;
+	bool matchout, match_modules;
 
 	/* Close write-fds */
-	if (t->output.stdout != NULL)
+	if (t->output.out != NULL)
 		close(fdout[1]);
-	if (t->output.stderr != NULL)
+	if (t->output.err != NULL)
 		close(fderr[1]);
 	close(fdmonitor[1]);
 
@@ -454,9 +727,9 @@ static inline int test_run_parent(const struct test *t, int fdout[2],
 	 * break pipe on the other end: either child already closed or we want
 	 * to stop it
 	 */
-	if (t->output.stdout != NULL)
+	if (t->output.out != NULL)
 		close(fdout[0]);
-	if (t->output.stderr != NULL)
+	if (t->output.err != NULL)
 		close(fderr[0]);
 	close(fdmonitor[0]);
 
@@ -464,7 +737,8 @@ static inline int test_run_parent(const struct test *t, int fdout[2],
 		pid = wait(&err);
 		if (pid == -1) {
 			ERR("error waitpid(): %m\n");
-			return EXIT_FAILURE;
+			err = EXIT_FAILURE;
+			goto exit;
 		}
 	} while (!WIFEXITED(err) && !WIFSIGNALED(err));
 
@@ -478,44 +752,65 @@ static inline int test_run_parent(const struct test *t, int fdout[2],
 	} else if (WIFSIGNALED(err)) {
 		ERR("'%s' [%u] terminated by signal %d (%s)\n", t->name, pid,
 				WTERMSIG(err), strsignal(WTERMSIG(err)));
-		return EXIT_FAILURE;
+		err = t->expected_fail ? EXIT_SUCCESS : EXIT_FAILURE;
+		goto exit;
 	}
+
+	if (matchout)
+		matchout = check_generated_files(t);
+	if (t->modules_loaded)
+		match_modules = check_loaded_modules(t);
+	else
+		match_modules = true;
 
 	if (t->expected_fail == false) {
 		if (err == 0) {
-			if (matchout)
+			if (matchout && match_modules)
 				LOG("%sPASSED%s: %s\n",
 					ANSI_HIGHLIGHT_GREEN_ON, ANSI_HIGHLIGHT_OFF,
 					t->name);
 			else {
-				ERR("%sFAILED%s: exit ok but outputs do not match: %s\n",
+				ERR("%sFAILED%s: exit ok but %s do not match: %s\n",
+					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
+					matchout ? "loaded modules" : "outputs",
+					t->name);
+				err = EXIT_FAILURE;
+			}
+		} else {
+			ERR("%sFAILED%s: %s\n",
+					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
+					t->name);
+		}
+	} else {
+		if (err == 0) {
+			if (matchout) {
+				ERR("%sUNEXPECTED PASS%s: exit with 0: %s\n",
+					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
+					t->name);
+				err = EXIT_FAILURE;
+			} else {
+				ERR("%sUNEXPECTED PASS%s: exit with 0 and outputs do not match: %s\n",
 					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
 					t->name);
 				err = EXIT_FAILURE;
 			}
-		} else
-			ERR("%sFAILED%s: %s\n",
-					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
-					t->name);
-	} else {
-		if (err == 0) {
-			if (matchout) {
-				LOG("%sUNEXPECTED PASS%s: %s\n",
-					ANSI_HIGHLIGHT_RED_ON, ANSI_HIGHLIGHT_OFF,
-					t->name);
-				err = EXIT_FAILURE;
-			} else
-				LOG("%sEXPECTED FAIL%s: exit ok but outputs do not match: %s\n",
-					ANSI_HIGHLIGHT_GREEN_ON, ANSI_HIGHLIGHT_OFF,
-					t->name);
 		} else {
-			ERR("%sEXPECTED FAIL%s: %s\n",
+			if (matchout) {
+				LOG("%sEXPECTED FAIL%s: %s\n",
 					ANSI_HIGHLIGHT_GREEN_ON, ANSI_HIGHLIGHT_OFF,
 					t->name);
-			err = EXIT_SUCCESS;
+				err = EXIT_SUCCESS;
+			} else {
+				LOG("%sEXPECTED FAIL%s: exit with %d but outputs do not match: %s\n",
+					ANSI_HIGHLIGHT_GREEN_ON, ANSI_HIGHLIGHT_OFF,
+					WEXITSTATUS(err), t->name);
+				err = EXIT_FAILURE;
+			}
 		}
 	}
 
+exit:
+	LOG("------\n");
 	return err;
 }
 
@@ -552,14 +847,14 @@ int test_run(const struct test *t)
 	if (t->need_spawn && oneshot)
 		test_run_spawned(t);
 
-	if (t->output.stdout != NULL) {
+	if (t->output.out != NULL) {
 		if (pipe(fdout) != 0) {
 			ERR("could not create out pipe for %s\n", t->name);
 			return EXIT_FAILURE;
 		}
 	}
 
-	if (t->output.stderr != NULL) {
+	if (t->output.err != NULL) {
 		if (pipe(fderr) != 0) {
 			ERR("could not create err pipe for %s\n", t->name);
 			return EXIT_FAILURE;

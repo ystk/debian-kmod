@@ -1,18 +1,19 @@
 /*
- * Copyright (C) 2012  ProFUSION embedded systems
+ * Copyright (C) 2012-2013  ProFUSION embedded systems
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #include <stdio.h>
@@ -25,7 +26,7 @@
 
 #include "testsuite.h"
 
-static __noreturn int test_initlib(const struct test *t)
+static noreturn int test_initlib(const struct test *t)
 {
 	struct kmod_ctx *ctx;
 	const char *null_config = NULL;
@@ -41,7 +42,7 @@ static __noreturn int test_initlib(const struct test *t)
 static DEFINE_TEST(test_initlib,
 		.description = "test if libkmod's init function work");
 
-static __noreturn int test_insert(const struct test *t)
+static noreturn int test_insert(const struct test *t)
 {
 	struct kmod_ctx *ctx;
 	struct kmod_module *mod;
@@ -73,9 +74,10 @@ static DEFINE_TEST(test_insert,
 		[TC_ROOTFS] = TESTSUITE_ROOTFS "test-init/",
 		[TC_INIT_MODULE_RETCODES] = "bla:1:20",
 	},
+	.modules_loaded = "ext4",
 	.need_spawn = true);
 
-static __noreturn int test_remove(const struct test *t)
+static noreturn int test_remove(const struct test *t)
 {
 	struct kmod_ctx *ctx;
 	struct kmod_module *mod;

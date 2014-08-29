@@ -1,25 +1,27 @@
 /*
- * Copyright (C) 2012  ProFUSION embedded systems
+ * Copyright (C) 2012-2013  ProFUSION embedded systems
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef _LIBKMOD_TESTSUITE_
-#define _LIBKMOD_TESTSUITE_
+#pragma once
 
 #include <stdbool.h>
 #include <stdarg.h>
+
+#include "macro.h"
 
 struct test;
 typedef int (*testfunc)(const struct test *t);
@@ -81,9 +83,20 @@ struct test {
 	const char *name;
 	const char *description;
 	struct {
-		const char *stdout;
-		const char *stderr;
+		/* File with correct stdout */
+		const char *out;
+		/* File with correct stderr */
+		const char *err;
+
+		/*
+		 * Vector with pair of files
+		 * key = correct file
+		 * val = file to check
+		 */
+		const struct keyval *files;
 	} output;
+	/* comma-separated list of loaded modules at the end of the test */
+	const char *modules_loaded;
 	testfunc func;
 	const char *config[_TC_LAST];
 	const char *path;
@@ -105,6 +118,16 @@ int test_run(const struct test *t);
 #define LOG(fmt, ...) _LOG("", fmt, ## __VA_ARGS__)
 #define WARN(fmt, ...) _LOG("WARN: ", fmt, ## __VA_ARGS__)
 #define ERR(fmt, ...) _LOG("ERR: ", fmt, ## __VA_ARGS__)
+
+#define assert_return(expr, r)						\
+	do {								\
+		if ((!(expr))) {					\
+			ERR("Failed assertion: " #expr "%s:%d %s",			\
+			    __FILE__, __LINE__, __PRETTY_FUNCTION__);	\
+			return (r);					\
+		}							\
+	} while (false)
+
 
 /* Test definitions */
 #define DEFINE_TEST(_name, ...) \
@@ -143,6 +166,10 @@ int test_run(const struct test *t);
 		exit(EXIT_SUCCESS);				\
 	}							\
 
+#ifdef noreturn
+# define __noreturn noreturn
+#elif __STDC_VERSION__ >= 201112L
+# define __noreturn _Noreturn
+#else
+# define __noreturn __attribute__((noreturn))
 #endif
-
-#define __noreturn __attribute__((noreturn))

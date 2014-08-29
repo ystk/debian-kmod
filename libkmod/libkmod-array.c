@@ -1,7 +1,7 @@
 /*
  * libkmod - interface to kernel module operations
  *
- * Copyright (C) 2011-2012  ProFUSION embedded systems
+ * Copyright (C) 2011-2013  ProFUSION embedded systems
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -28,6 +28,17 @@
 
 /* basic pointer array growing in steps */
 
+
+static int array_realloc(struct array *array, size_t new_total)
+{
+	void *tmp = realloc(array->array, sizeof(void *) * new_total);
+	if (tmp == NULL)
+		return -ENOMEM;
+	array->array = tmp;
+	array->total = new_total;
+	return 0;
+}
+
 void array_init(struct array *array, size_t step)
 {
 	assert(step > 0);
@@ -42,13 +53,9 @@ int array_append(struct array *array, const void *element)
 	size_t idx;
 
 	if (array->count + 1 >= array->total) {
-		size_t new_total = array->total + array->step;
-		void *tmp = realloc(array->array, sizeof(void *) * new_total);
-		assert(array->step > 0);
-		if (tmp == NULL)
-			return -ENOMEM;
-		array->array = tmp;
-		array->total = new_total;
+		int r = array_realloc(array, array->total + array->step);
+		if (r < 0)
+			return r;
 	}
 	idx = array->count;
 	array->array[idx] = (void *)element;
@@ -69,13 +76,9 @@ int array_append_unique(struct array *array, const void *element)
 void array_pop(struct array *array) {
 	array->count--;
 	if (array->count + array->step < array->total) {
-		size_t new_total = array->total - array->step;
-		void *tmp = realloc(array->array, sizeof(void *) * new_total);
-		assert(array->step > 0);
-		if (tmp == NULL)
+		int r = array_realloc(array, array->total - array->step);
+		if (r < 0)
 			return;
-		array->array = tmp;
-		array->total = new_total;
 	}
 }
 
@@ -102,13 +105,10 @@ int array_remove_at(struct array *array, unsigned int pos)
 			sizeof(void *) * (array->count - pos));
 
 	if (array->count + array->step < array->total) {
-		size_t new_total = array->total - array->step;
-		void *tmp = realloc(array->array, sizeof(void *) * new_total);
-		assert(array->step > 0);
-		if (tmp == NULL)
+		int r = array_realloc(array, array->total - array->step);
+		/* ignore error */
+		if (r < 0)
 			return 0;
-		array->array = tmp;
-		array->total = new_total;
 	}
 
 	return 0;
